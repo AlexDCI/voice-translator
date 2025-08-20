@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<title>🎤 Голос → Текст → Перевод</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body{font-family:system-ui,Arial,sans-serif;max-width:720px;margin:40px auto;padding:0 16px}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  button,select{padding:10px 14px;font-size:16px;border-radius:10px;border:1px solid #ccc}
+  #status{margin-top:12px;font-weight:600}
+  .box{white-space:pre-wrap;margin-top:12px;padding:12px;border:1px solid #ddd;border-radius:10px;background:#fafafa}
+  #meter{width:100%;height:18px;background:#eee;border-radius:6px;overflow:hidden}
+  #level{height:100%;width:0%;background:lime}
+</style>
+
+<h1>🎤 Голос → Текст → Перевод</h1>
+
+<div class="row">
+  <label>С языка:</label>
+  <select id="src">
+    <option value="auto">Авто</option>
+    <option value="ru">Русский</option>
+    <option value="en">English</option>
+    <option value="de">Deutsch</option>
+  </select>
+
+  <label>На язык:</label>
+  <select id="tgt">
+    <option value="en">English</option>
+    <option value="ru">Русский</option>
+    <option value="de">Deutsch</option>
+  </select>
+</div>
+
+<p></p>
+<div class="row">
+  <button id="recBtn">● Записать</button>
+  <button id="stopBtn" disabled>■ Стоп</button>
+</div>
+
+<p id="status">Готово</p>
+<div id="meter"><div id="level"></div></div>
+
+<div class="box" id="recognized"><b>📝 Распознанный текст:</b>\n—</div>
+<div class="box" id="translated"><b>🌍 Перевод:</b>\n—</div>
+
+<script>
+let mediaRecorder, chunks=[], audioContext, analyser, dataArray, rafId;
+
+const recBtn = document.getElementById('recBtn');
+const stopBtn = document.getElementById('stopBtn');
+const statusEl = document.getElementById('status');
+const recognized = document.getElementById('recognized');
+const translated = document.getElementById('translated');
+const level = document.getElementById('level');
+const srcSel = document.getElementById('src');
+const tgtSel = document.getElementById('tgt');
+
+recBtn.onclick = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+
+  // индикатор громкости
+  audioContext = new AudioContext();
+  analyser = audioContext.createAnalyser();
+  const source = audioContext.createMediaStreamSource(stream);
+  source.connect(analyser);
+  dataArray = new Uint8Array(analyser.frequencyBinCount);
+  const updateMeter = () => {
+    analyser.getByteTimeDomainData(dataArray);
+    let sum=0; for (let i=0;i<dataArray.length;i++) sum += Math.abs(dataArray[i]-128);
+    const volume = Math.min(100, (sum/dataArray.length)*2);
+    level.style.width = volume + "%";
+    rafId = requestAnimationFrame(updateMeter);
+  }; updateMeter();
+
+  // запись
+  mediaRecorder = new MediaRecorder(stream, {mimeType:'audio/webm'});
+  chunks = [];
+  mediaRecorder.ondataavailable = e => { if(e.data.size) chunks.push(e.data); };
+  mediaRecorder.onstop = async () => {
+    cancelAnimationFrame(rafId); audioContext.close();
+    const blob = new Blob(chunks, {type:'audio/webm'});
+    const file = new File([blob], "recording.webm", {type:'audio/webm'});
+    await sendFile(file);
+  };
+  mediaRecorder.start();
+
+  recBtn.disabled = true; stopBtn.disabled = false;
+  statusEl.textContent = "🔴 Запись идёт…";
+  recognized.textContent = "📝 Распознанный текст:\n—";
+  translated.textContent = "🌍 Перевод:\n—";
+};
+
+stopBtn.onclick = () => {
+  mediaRecorder.stop();
+  recBtn.disabled = false; stopBtn.disabled = true;
+  statusEl.textContent = "⏳ Обработка…";
+};
+
+async function sendFile(file){
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("source_lang", srcSel.value);
+  fd.append("target_lang", tgtSel.value);
+
+  const resp = await fetch("/speech-translate", {method:"POST", body: fd});
+  const data = await resp.json();
+
+  statusEl.textContent = data.error ? "⚠️ Ошибка" : "✅ Готово";
+
+  const srcName = data.source_language_name || (data.source_language || "auto");
+  recognized.textContent = data.error
+    ? "Ошибка: " + data.error
+    : `📝 Распознанный текст (${srcName}):\n${data.source_text || "—"}`;
+
+  translated.textContent = data.error
+    ? "—"
+    : `🌍 Перевод (${data.target_language_name || data.target_language}):\n${data.translated_text || "—"}`;
+}
+</script>
