@@ -1,13 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, Form, Depends, Header, HTTPException
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-import os
-from fastapi import UploadFile, File, Form
-from fastapi.responses import JSONResponse
 from openai import OpenAI
-from fastapi.responses import HTMLResponse
+import os, tempfile, subprocess
 import imageio_ffmpeg
-import tempfile, subprocess, uuid, shutil
-
+import jwt
 
 # Загружаем переменные из .env
 load_dotenv()
@@ -17,6 +15,29 @@ app = FastAPI()
 
 # клиент OpenAI (использует ключ из .env)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+
+VOICE_JWT_SECRET = os.getenv("VOICE_JWT_SECRET", "change-me")
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.getenv("DJANGO_ORIGIN", "http://127.0.0.1:8000")],  # твой Django
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def get_user(authorization: str | None = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    token = authorization.split(" ", 1)[1]
+    try:
+        payload = jwt.decode(token, VOICE_JWT_SECRET, algorithms=["HS256"])
+        return {"user_id": payload["user_id"], "username": payload["username"]}
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 # карты языков
@@ -38,6 +59,7 @@ async def speech_translate(
     file: UploadFile = File(...),
     source_lang: str = Form("auto"),   # 'auto' | 'ru' | 'en' | 'de'
     target_lang: str = Form("en"),     # 'ru' | 'en' | 'de'
+    user=Depends(get_user)   # ✅ проверка JWT здесь!
 ):
     # 1) сохраняем входной файл
     suffix = os.path.splitext(file.filename)[1] or ".webm"
