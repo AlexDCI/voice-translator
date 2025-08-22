@@ -41,34 +41,100 @@ def get_user(authorization: str | None = Header(None)):
 
 
 # карты языков
-LANG_NAME = {"ru":"Russian", "en":"English", "de":"German"}
-LANG_CODE = {"ru":"ru", "en":"en", "de":"de"}  # коды для STT
-def name_of(code): return {"ru":"Русский","en":"English","de":"Deutsch"}.get(code, "Auto")
+# карты языков: code -> English name
+LANG_NAME = {
+    "en": "English",
+    "ru": "Russian",
+    "de": "German",
+    "es": "Spanish",
+    "fr": "French",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "zh": "Chinese",
+    "zh-tw": "Chinese-Traditional",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "bn": "Bengali",
+    "ur": "Urdu",
+    "tr": "Turkish",
+    "nl": "Dutch",
+    "el": "Greek",
+    "pl": "Polish",
+    "cs": "Czech",
+    "hu": "Hungarian",
+    "sv": "Swedish",
+    "da": "Danish",
+    "fi": "Finnish",
+    "no": "Norwegian",
+    "he": "Hebrew",
+    "th": "Thai",
+    "vi": "Vietnamese",
+    "id": "Indonesian",
+    "ms": "Malay",
+    "fil": "Filipino",
+    "ro": "Romanian",
+    "sk": "Slovak",
+    "bg": "Bulgarian",
+    "hr": "Croatian",
+    "sr": "Serbian",
+    "sl": "Slovenian",
+    "lt": "Lithuanian",
+    "lv": "Latvian",
+    "et": "Estonian",
+    "ka": "Georgian",
+    "hy": "Armenian",
+    "fa": "Persian",
+    "ps": "Pashto",
+    "az": "Azerbaijani",
+    "kk": "Kazakh",
+    "uz": "Uzbek",
+    "tg": "Tajik",
+    "tk": "Turkmen",
+    "ky": "Kyrgyz",
+    "mn": "Mongolian",
+    "sw": "Swahili",
+    "zu": "Zulu",
+    "xh": "Xhosa",
+    "af": "Afrikaans",
+    "ht": "Haitian Creole",
+    "eu": "Basque",
+    "gl": "Galician",
+    "ca": "Catalan",
+    "ga": "Irish",
+    "cy": "Welsh",
+    "gd": "Scottish Gaelic",
+    "mt": "Maltese",
+    "is": "Icelandic",
+    "sa": "Sanskrit",
+    "bo": "Tibetan",
+    "mi": "Maori",
+    "sm": "Samoan",
+    "to": "Tongan"
+}
 
-
-
-@app.get("/", response_class=HTMLResponse)
-def index():
-    with open(os.path.join(os.path.dirname(__file__), "templates", "index.html"), encoding="utf-8") as f:
-        return f.read()
-    
+def name_of(code: str) -> str:
+    """Красивое название языка для ответа"""
+    if code == "auto":
+        return "Auto"
+    return LANG_NAME.get(code, code)
 
 
 @app.post("/speech-translate")
 async def speech_translate(
     file: UploadFile = File(...),
-    source_lang: str = Form("auto"),   # 'auto' | 'ru' | 'en' | 'de'
-    target_lang: str = Form("en"),     # 'ru' | 'en' | 'de'
-    user=Depends(get_user)   # ✅ проверка JWT здесь!
+    source_lang: str = Form("auto"),   # 'auto' | 'en' | 'ru' | ...
+    target_lang: str = Form("en"),     # 'en' | 'ru' | ...
+    user=Depends(get_user)
 ):
-    # 1) сохраняем входной файл
+    # сохраняем входной файл
     suffix = os.path.splitext(file.filename)[1] or ".webm"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_in:
         data = await file.read()
         tmp_in.write(data)
         in_path = tmp_in.name
 
-    # 2) конвертируем в WAV 16kHz mono
     out_path = in_path.replace(suffix, ".wav")
     try:
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
@@ -80,29 +146,31 @@ async def speech_translate(
         return JSONResponse({"error": f"FFmpeg convert error: {e}"}, status_code=500)
 
     try:
-        # 3) STT (можно попробовать whisper-1 если точность нужна максимальная)
+        # === 1) Speech-to-text (STT) ===
         stt_kwargs = {"model": "gpt-4o-transcribe"}
-        if source_lang in LANG_CODE:  # задаём язык явно
-            stt_kwargs["language"] = LANG_CODE[source_lang]
+        if source_lang in LANG_NAME:  # язык явно указан
+            stt_kwargs["language"] = source_lang  # ← передаём код (например "ru"), а не "Russian"
 
         with open(out_path, "rb") as f:
             stt = client.audio.transcriptions.create(file=f, **stt_kwargs)
 
         src_text = (stt.text or "").strip()
-        detected = getattr(stt, "language", None)  # может быть None
-        src_code = source_lang if source_lang in LANG_CODE else (detected or "auto")
+        detected = getattr(stt, "language", None)  # язык, который определила модель
+        src_code = source_lang if source_lang in LANG_NAME else (detected or "auto")
 
-        # 4) Перевод (если target == source — просто возвращаем исходник)
+        # === 2) Перевод ===
         if target_lang == src_code:
             translated = src_text
         else:
-            tgt_name_en = LANG_NAME[target_lang]  # имя на английском для подсказки модели
+            if target_lang not in LANG_NAME:
+                target_lang = "en"  # fallback
+            tgt_name_en = LANG_NAME[target_lang]
             prompt = f"Translate the following text to {tgt_name_en}. Keep meaning, names and numbers:\n\n{src_text}"
             comp = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role":"system","content":"You are a precise, context-aware translation engine."},
-                    {"role":"user","content":prompt},
+                    {"role": "system", "content": "You are a precise, context-aware translation engine."},
+                    {"role": "user", "content": prompt},
                 ],
             )
             translated = comp.choices[0].message.content.strip()
@@ -122,45 +190,3 @@ async def speech_translate(
         for p in (in_path, out_path):
             try: os.remove(p)
             except: pass
-
-
-
-
-@app.post("/transcribe")
-async def transcribe(file: UploadFile):
-    try:
-        # 1. Сохраняем входной webm во временный файл
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp_in:
-            data = await file.read()
-            tmp_in.write(data)
-            tmp_in_path = tmp_in.name
-
-        # 2. Создаём временный wav-файл
-        tmp_out_path = tmp_in_path.replace(".webm", ".wav")
-
-        # 3. Конвертация webm → wav через ffmpeg
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        cmd = [
-            ffmpeg_exe, "-i", tmp_in_path,
-            "-ar", "16000", "-ac", "1", "-f", "wav",
-            tmp_out_path
-        ]
-        subprocess.run(cmd, check=True)
-
-        # 4. Отправляем wav в OpenAI Whisper
-        with open(tmp_out_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="gpt-4o-transcribe",   # или whisper-1
-                file=audio_file,
-                language="ru"                # ← явно указываем русский
-            )
-
-        # 5. Чистим временные файлы
-        os.remove(tmp_in_path)
-        os.remove(tmp_out_path)
-
-        return {"text": transcript.text, "source_language": "auto"}
-
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
