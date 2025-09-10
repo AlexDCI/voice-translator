@@ -190,3 +190,8 @@ async def speech_translate(
         for p in (in_path, out_path):
             try: os.remove(p)
             except: pass
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
