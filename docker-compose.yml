@@ -6,9 +6,10 @@ services:
     container_name: voice
     restart: always
     env_file:
-      - /opt/voice/.env      # .env будет лежать НА СЕРВЕРЕ, вне репозитория
+      - /opt/voice/.env      # на сервере: этот путь существует
     ports:
       - "127.0.0.1:8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --proxy-headers
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 30s
